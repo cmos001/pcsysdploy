@@ -17,12 +17,31 @@ jobs:
         shell: powershell
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?linkid=2289980' -OutFile "$env:RUNNER_TEMP\adksetup.exe"
-          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?linkid=2289981' -OutFile "$env:RUNNER_TEMP\adkwinpesetup.exe"
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?linkid=2162950' -OutFile "$env:RUNNER_TEMP\adksetup.exe"
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?linkid=2163233' -OutFile "$env:RUNNER_TEMP\adkwinpesetup.exe"
 
       - name: Install ADK Deployment Tools
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Invoke-Installer {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string]$FilePath,
+
+              [Parameter(Mandatory = $true)]
+              [string[]]$ArgumentList
+            )
+
+            Write-Host ("Running installer: {0} {1}" -f $FilePath, ($ArgumentList -join ' '))
+            $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru -NoNewWindow
+            Write-Host ("Installer exit code: {0}" -f $process.ExitCode)
+            if ($process.ExitCode -ne 0) {
+              throw ("Installer failed with exit code {0}: {1}" -f $process.ExitCode, $FilePath)
+            }
+          }
+
           if (-not (Test-Path -LiteralPath $env:ADK_INSTALL_ROOT)) {
             New-Item -Path $env:ADK_INSTALL_ROOT -ItemType Directory -Force | Out-Null
           }
@@ -32,40 +51,73 @@ jobs:
           }
           New-Item -Path $env:ADK_LAYOUT_ROOT -ItemType Directory -Force | Out-Null
 
-          Start-Process -FilePath "$env:RUNNER_TEMP\adksetup.exe" -ArgumentList @(
+          Invoke-Installer -FilePath "$env:RUNNER_TEMP\adksetup.exe" -ArgumentList @(
             '/quiet',
             '/layout', $env:ADK_LAYOUT_ROOT
-          ) -Wait -NoNewWindow
+          )
 
-          Start-Process -FilePath "$env:RUNNER_TEMP\adksetup.exe" -ArgumentList @(
+          Invoke-Installer -FilePath "$env:RUNNER_TEMP\adksetup.exe" -ArgumentList @(
             '/quiet',
             '/norestart',
             '/ceip', 'off',
             '/installpath', $env:ADK_INSTALL_ROOT,
             '/features', 'OptionId.DeploymentTools'
-          ) -Wait -NoNewWindow
+          )
+
+          Write-Host "ADK layout snapshot: $env:ADK_LAYOUT_ROOT"
+          Get-ChildItem -LiteralPath $env:ADK_LAYOUT_ROOT -Force -ErrorAction SilentlyContinue | Select-Object FullName
+
+          Write-Host 'Windows Kits snapshot: C:\Program Files (x86)\Windows Kits\10'
+          Get-ChildItem -LiteralPath 'C:\Program Files (x86)\Windows Kits\10' -Force -ErrorAction SilentlyContinue | Select-Object FullName
+
+          Write-Host 'Searching for recent ADK logs under ProgramData'
+          Get-ChildItem -LiteralPath 'C:\ProgramData' -Filter '*ADK*' -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 20 FullName, LastWriteTime
 
       - name: Install WinPE add-on
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Invoke-Installer {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string]$FilePath,
+
+              [Parameter(Mandatory = $true)]
+              [string[]]$ArgumentList
+            )
+
+            Write-Host ("Running installer: {0} {1}" -f $FilePath, ($ArgumentList -join ' '))
+            $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru -NoNewWindow
+            Write-Host ("Installer exit code: {0}" -f $process.ExitCode)
+            if ($process.ExitCode -ne 0) {
+              throw ("Installer failed with exit code {0}: {1}" -f $process.ExitCode, $FilePath)
+            }
+          }
+
           $winPeLayout = Join-Path $env:ADK_LAYOUT_ROOT 'WinPE'
           if (Test-Path -LiteralPath $winPeLayout) {
             Remove-Item -LiteralPath $winPeLayout -Recurse -Force
           }
           New-Item -Path $winPeLayout -ItemType Directory -Force | Out-Null
 
-          Start-Process -FilePath "$env:RUNNER_TEMP\adkwinpesetup.exe" -ArgumentList @(
+          Invoke-Installer -FilePath "$env:RUNNER_TEMP\adkwinpesetup.exe" -ArgumentList @(
             '/quiet',
             '/layout', $winPeLayout
-          ) -Wait -NoNewWindow
+          )
 
-          Start-Process -FilePath "$env:RUNNER_TEMP\adkwinpesetup.exe" -ArgumentList @(
+          Invoke-Installer -FilePath "$env:RUNNER_TEMP\adkwinpesetup.exe" -ArgumentList @(
             '/quiet',
             '/norestart',
             '/ceip', 'off',
             '/installpath', $env:ADK_INSTALL_ROOT,
             '/features', 'OptionId.WindowsPreinstallationEnvironment'
-          ) -Wait -NoNewWindow
+          )
+
+          Write-Host "WinPE layout snapshot: $winPeLayout"
+          Get-ChildItem -LiteralPath $winPeLayout -Force -ErrorAction SilentlyContinue | Select-Object FullName
 
       - name: Build PE and inject autodeploy only
         shell: powershell
