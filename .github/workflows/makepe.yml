@@ -56,7 +56,12 @@ jobs:
             '/layout', $env:ADK_LAYOUT_ROOT
           )
 
-          Invoke-Installer -FilePath "$env:RUNNER_TEMP\adksetup.exe" -ArgumentList @(
+          $offlineAdkSetup = Join-Path $env:ADK_LAYOUT_ROOT 'adksetup.exe'
+          if (-not (Test-Path -LiteralPath $offlineAdkSetup -PathType Leaf)) {
+            throw "Offline ADK setup was not created in layout: $offlineAdkSetup"
+          }
+
+          Invoke-Installer -FilePath $offlineAdkSetup -ArgumentList @(
             '/quiet',
             '/norestart',
             '/ceip', 'off',
@@ -108,7 +113,12 @@ jobs:
             '/layout', $winPeLayout
           )
 
-          Invoke-Installer -FilePath "$env:RUNNER_TEMP\adkwinpesetup.exe" -ArgumentList @(
+          $offlineWinPeSetup = Join-Path $winPeLayout 'adkwinpesetup.exe'
+          if (-not (Test-Path -LiteralPath $offlineWinPeSetup -PathType Leaf)) {
+            throw "Offline WinPE setup was not created in layout: $offlineWinPeSetup"
+          }
+
+          Invoke-Installer -FilePath $offlineWinPeSetup -ArgumentList @(
             '/quiet',
             '/norestart',
             '/ceip', 'off',
