@@ -127,6 +127,7 @@ jobs:
 
       - name: Build PE and inject autodeploy only
         shell: powershell
+        timeout-minutes: 60
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -142,21 +143,25 @@ jobs:
             )
 
             Write-Host ("Running: {0} {1}" -f $FilePath, ($ArgumentList -join ' '))
-            $startProcessSplat = @{
-              FilePath = $FilePath
-              ArgumentList = $ArgumentList
-              Wait = $true
-              PassThru = $true
-              NoNewWindow = $true
-            }
+            $previousLocation = $null
+            try {
+              if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+                $previousLocation = Get-Location
+                Set-Location -LiteralPath $WorkingDirectory
+              }
 
-            if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
-              $startProcessSplat['WorkingDirectory'] = $WorkingDirectory
-            }
+              & $FilePath @ArgumentList
+              $exitCode = $LASTEXITCODE
+              if ($exitCode -ne 0) {
+                throw ("Command failed with exit code {0}: {1}" -f $exitCode, $FilePath)
+              }
 
-            $process = Start-Process @startProcessSplat
-            if ($process.ExitCode -ne 0) {
-              throw ("Command failed with exit code {0}: {1}" -f $process.ExitCode, $FilePath)
+              Write-Host ("Completed: {0}" -f $FilePath)
+            }
+            finally {
+              if ($null -ne $previousLocation) {
+                Set-Location -LiteralPath $previousLocation.Path
+              }
             }
           }
 
@@ -301,6 +306,7 @@ jobs:
           }
 
           Invoke-DeploymentToolsBatch -EnvironmentBatch $dandISetEnv -ToolCommand 'copype' -ToolArguments @('amd64', $workDir) -WorkingDirectory (Split-Path -Parent $copype)
+          Write-Host 'copype finished.'
 
           if (-not (Test-Path -LiteralPath $bootWim -PathType Leaf)) {
             throw "boot.wim was not created by copype: $bootWim"
@@ -317,6 +323,7 @@ jobs:
               '/Index:1'
               "/MountDir:$mountDir"
             )
+            Write-Host 'boot.wim mount finished.'
 
             $mountedSystem32 = Join-Path $mountDir 'Windows\System32'
             if (-not (Test-Path -LiteralPath $mountedSystem32 -PathType Container)) {
@@ -349,6 +356,7 @@ jobs:
                 '/Add-Package'
                 "/PackagePath:$neutralCab"
               )
+              Write-Host ("Neutral package added: {0}" -f $package)
 
               if (Test-Path -LiteralPath $langCab -PathType Leaf) {
                 Write-Host "Adding WinPE language package: $langCab"
@@ -357,6 +365,7 @@ jobs:
                   '/Add-Package'
                   "/PackagePath:$langCab"
                 )
+                Write-Host ("Language package added: {0}" -f $package)
               }
             }
 
@@ -373,6 +382,7 @@ jobs:
               "/MountDir:$mountDir"
               '/Commit'
             )
+            Write-Host 'boot.wim unmount commit finished.'
           }
           catch {
             if (Test-Path -LiteralPath $mountDir) {
@@ -388,9 +398,11 @@ jobs:
 
           $isoPath = Join-Path $env:RUNNER_TEMP 'sysdeploy-win10pe.iso'
           Invoke-DeploymentToolsBatch -EnvironmentBatch $dandISetEnv -ToolCommand 'MakeWinPEMedia' -ToolArguments @('/ISO', '/F', $workDir, $isoPath, '/bootex') -WorkingDirectory (Split-Path -Parent $makeWinPeMedia)
+          Write-Host 'MakeWinPEMedia finished.'
 
           New-Item -Path (Join-Path $env:GITHUB_WORKSPACE 'out') -ItemType Directory -Force | Out-Null
           Copy-Item -LiteralPath $isoPath -Destination (Join-Path $env:GITHUB_WORKSPACE 'out\sysdeploy-win10pe.iso') -Force
+          Write-Host 'ISO copied to workspace output.'
 
       - name: Upload PE ISO
         uses: actions/upload-artifact@v4
