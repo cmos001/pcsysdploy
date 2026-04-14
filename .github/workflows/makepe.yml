@@ -63,6 +63,22 @@ jobs:
           $makeWinPeMedia = Get-ChildItem -LiteralPath $adkRoot -Filter 'MakeWinPEMedia.cmd' -Recurse | Select-Object -First 1 -ExpandProperty FullName
           $winpeOcRoot = Join-Path $adkRoot 'Windows Preinstallation Environment\amd64\WinPE_OCs'
 
+          Write-Host "ProgramFiles(x86): ${env:ProgramFiles(x86)}"
+          Write-Host "ADK root candidate: $adkRoot"
+          Write-Host "copype candidate: $copype"
+          Write-Host "MakeWinPEMedia candidate: $makeWinPeMedia"
+          Write-Host "WinPE optional components root: $winpeOcRoot"
+
+          if (Test-Path -LiteralPath "${env:ProgramFiles(x86)}\Windows Kits\10") {
+            Write-Host 'Windows Kits 10 tree snapshot:'
+            Get-ChildItem -LiteralPath "${env:ProgramFiles(x86)}\Windows Kits\10" -Force | Select-Object FullName
+          }
+
+          if (Test-Path -LiteralPath $adkRoot) {
+            Write-Host 'ADK root snapshot:'
+            Get-ChildItem -LiteralPath $adkRoot -Force | Select-Object FullName
+          }
+
           if (-not $copype) { throw 'copype.cmd was not found after ADK installation.' }
           if (-not $makeWinPeMedia) { throw 'MakeWinPEMedia.cmd was not found after ADK installation.' }
           if (-not (Test-Path -LiteralPath $winpeOcRoot)) { throw "WinPE optional components not found: $winpeOcRoot" }
@@ -85,6 +101,8 @@ jobs:
             throw "boot.wim was not created by copype: $bootWim"
           }
 
+          Write-Host "boot.wim created at: $bootWim"
+
           New-Item -Path $mountDir -ItemType Directory -Force | Out-Null
 
           try {
@@ -99,6 +117,8 @@ jobs:
             if (-not (Test-Path -LiteralPath $mountedSystem32 -PathType Container)) {
               throw "Mounted WinPE image does not expose Windows\\System32: $mountedSystem32"
             }
+
+            Write-Host "Mounted image system32 path: $mountedSystem32"
 
             $packages = @(
               'WinPE-WMI',
@@ -117,6 +137,8 @@ jobs:
                 throw "Missing WinPE package: $neutralCab"
               }
 
+              Write-Host "Adding WinPE package: $neutralCab"
+
               Invoke-External -FilePath 'dism.exe' -ArgumentList @(
                 "/Image:$mountDir"
                 '/Add-Package'
@@ -124,6 +146,7 @@ jobs:
               )
 
               if (Test-Path -LiteralPath $langCab -PathType Leaf) {
+                Write-Host "Adding WinPE language package: $langCab"
                 Invoke-External -FilePath 'dism.exe' -ArgumentList @(
                   "/Image:$mountDir"
                   '/Add-Package'
