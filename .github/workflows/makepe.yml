@@ -6,6 +6,8 @@ on:
 jobs:
   build:
     runs-on: windows-2022
+    env:
+      ADK_INSTALL_ROOT: C:\ADK
 
     steps:
       - uses: actions/checkout@v4
@@ -20,10 +22,15 @@ jobs:
       - name: Install ADK Deployment Tools
         shell: powershell
         run: |
+          if (-not (Test-Path -LiteralPath $env:ADK_INSTALL_ROOT)) {
+            New-Item -Path $env:ADK_INSTALL_ROOT -ItemType Directory -Force | Out-Null
+          }
+
           Start-Process -FilePath "$env:RUNNER_TEMP\adksetup.exe" -ArgumentList @(
             '/quiet',
             '/norestart',
             '/ceip', 'off',
+            '/installpath', $env:ADK_INSTALL_ROOT,
             '/features', 'OptionId.DeploymentTools'
           ) -Wait -NoNewWindow
 
@@ -34,6 +41,7 @@ jobs:
             '/quiet',
             '/norestart',
             '/ceip', 'off',
+            '/installpath', $env:ADK_INSTALL_ROOT,
             '/features', 'OptionId.WindowsPreinstallationEnvironment'
           ) -Wait -NoNewWindow
 
@@ -58,66 +66,31 @@ jobs:
             }
           }
 
-          $kitsRoots = @(
-            (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits'),
-            (Join-Path $env:ProgramFiles 'Windows Kits')
-          ) | Select-Object -Unique
-
-          $existingKitsRoots = @($kitsRoots | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
-          if ($existingKitsRoots.Count -eq 0) {
-            throw 'No Windows Kits root was found after ADK installation.'
-          }
-
-          $assessmentRoots = @(
-            foreach ($kitsRoot in $existingKitsRoots) {
-              Get-ChildItem -LiteralPath $kitsRoot -Directory -Recurse -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -eq 'Assessment and Deployment Kit' } |
-                Select-Object -ExpandProperty FullName
-            }
-          ) | Select-Object -Unique
-
-          if ($assessmentRoots.Count -eq 0) {
-            throw 'Assessment and Deployment Kit directory was not found under any Windows Kits root.'
-          }
-
+          $adkRoot = $env:ADK_INSTALL_ROOT
           $copype = @(
-            foreach ($root in $assessmentRoots) {
-              Get-ChildItem -LiteralPath $root -Filter 'copype.cmd' -File -Recurse -ErrorAction SilentlyContinue |
-                Select-Object -ExpandProperty FullName
-            }
+            Get-ChildItem -LiteralPath $adkRoot -Filter 'copype.cmd' -File -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty FullName
           ) | Select-Object -First 1
 
           $makeWinPeMedia = @(
-            foreach ($root in $assessmentRoots) {
-              Get-ChildItem -LiteralPath $root -Filter 'MakeWinPEMedia.cmd' -File -Recurse -ErrorAction SilentlyContinue |
-                Select-Object -ExpandProperty FullName
-            }
+            Get-ChildItem -LiteralPath $adkRoot -Filter 'MakeWinPEMedia.cmd' -File -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty FullName
           ) | Select-Object -First 1
 
           $winpeOcRoot = @(
-            foreach ($root in $assessmentRoots) {
-              Get-ChildItem -LiteralPath $root -Directory -Recurse -ErrorAction SilentlyContinue |
-                Where-Object { $_.FullName -like '*\amd64\WinPE_OCs' } |
-                Select-Object -ExpandProperty FullName
-            }
+            Get-ChildItem -LiteralPath $adkRoot -Directory -Recurse -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -like '*\amd64\WinPE_OCs' } |
+              Select-Object -ExpandProperty FullName
           ) | Select-Object -First 1
 
-          Write-Host "ProgramFiles(x86): ${env:ProgramFiles(x86)}"
-          Write-Host "ProgramFiles: $env:ProgramFiles"
-          Write-Host "Windows Kits roots: $($existingKitsRoots -join '; ')"
-          Write-Host "ADK roots found: $($assessmentRoots -join '; ')"
+          Write-Host "ADK install root: $adkRoot"
           Write-Host "copype candidate: $copype"
           Write-Host "MakeWinPEMedia candidate: $makeWinPeMedia"
           Write-Host "WinPE optional components root: $winpeOcRoot"
 
-          foreach ($kitsRoot in $existingKitsRoots) {
-            Write-Host "Windows Kits root snapshot: $kitsRoot"
-            Get-ChildItem -LiteralPath $kitsRoot -Force | Select-Object FullName
-          }
-
-          foreach ($assessmentRoot in $assessmentRoots) {
-            Write-Host "ADK root snapshot: $assessmentRoot"
-            Get-ChildItem -LiteralPath $assessmentRoot -Force | Select-Object FullName
+          if (Test-Path -LiteralPath $adkRoot) {
+            Write-Host "ADK install root snapshot: $adkRoot"
+            Get-ChildItem -LiteralPath $adkRoot -Force | Select-Object FullName
           }
 
           if (-not $copype) { throw 'copype.cmd was not found after ADK installation.' }
