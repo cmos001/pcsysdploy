@@ -234,7 +234,37 @@ jobs:
             return $null
           }
 
+          function Invoke-DeploymentToolsBatch {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string]$EnvironmentBatch,
+
+              [Parameter(Mandatory = $true)]
+              [string]$ToolBatch,
+
+              [Parameter(Mandatory = $true)]
+              [string[]]$ToolArguments,
+
+              [Parameter(Mandatory = $true)]
+              [string]$WorkingDirectory
+            )
+
+            $quotedArgs = @()
+            foreach ($argument in $ToolArguments) {
+              if ($argument -match '\s') {
+                $quotedArgs += ('"{0}"' -f $argument)
+              }
+              else {
+                $quotedArgs += $argument
+              }
+            }
+
+            $commandLine = 'call "{0}" && call "{1}" {2}' -f $EnvironmentBatch, $ToolBatch, ($quotedArgs -join ' ')
+            Invoke-External -FilePath 'cmd.exe' -ArgumentList @('/c', $commandLine) -WorkingDirectory $WorkingDirectory
+          }
+
           $adkRoots = Get-AdkCandidateRoots
+          $dandISetEnv = Find-FirstPath -Roots $adkRoots -Filter 'DandISetEnv.bat'
           $copype = Find-FirstPath -Roots $adkRoots -Filter 'copype.cmd'
           $makeWinPeMedia = Find-FirstPath -Roots $adkRoots -Filter 'MakeWinPEMedia.cmd'
           $winpeOcRoot = Find-WinPeOcRoot -Roots $adkRoots
@@ -243,6 +273,7 @@ jobs:
           Write-Host "Configured ADK layout root: $env:ADK_LAYOUT_ROOT"
           Write-Host 'Candidate ADK roots:'
           $adkRoots | ForEach-Object { Write-Host " - $_" }
+          Write-Host "DandISetEnv candidate: $dandISetEnv"
           Write-Host "copype candidate: $copype"
           Write-Host "MakeWinPEMedia candidate: $makeWinPeMedia"
           Write-Host "WinPE optional components root: $winpeOcRoot"
@@ -252,6 +283,7 @@ jobs:
             Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue | Select-Object FullName
           }
 
+          if (-not $dandISetEnv) { throw 'DandISetEnv.bat was not found after ADK installation.' }
           if (-not $copype) { throw 'copype.cmd was not found after ADK installation.' }
           if (-not $makeWinPeMedia) { throw 'MakeWinPEMedia.cmd was not found after ADK installation.' }
           if ([string]::IsNullOrWhiteSpace($winpeOcRoot) -or -not (Test-Path -LiteralPath $winpeOcRoot)) { throw "WinPE optional components not found: $winpeOcRoot" }
@@ -268,7 +300,7 @@ jobs:
             Remove-Item -LiteralPath $mountDir -Recurse -Force
           }
 
-          Invoke-External -FilePath $copype -ArgumentList @('amd64', $workDir) -WorkingDirectory (Split-Path -Parent $copype)
+          Invoke-DeploymentToolsBatch -EnvironmentBatch $dandISetEnv -ToolBatch $copype -ToolArguments @('amd64', $workDir) -WorkingDirectory (Split-Path -Parent $copype)
 
           if (-not (Test-Path -LiteralPath $bootWim -PathType Leaf)) {
             throw "boot.wim was not created by copype: $bootWim"
@@ -355,7 +387,7 @@ jobs:
           }
 
           $isoPath = Join-Path $env:RUNNER_TEMP 'sysdeploy-win10pe.iso'
-          Invoke-External -FilePath $makeWinPeMedia -ArgumentList @('/ISO', '/F', $workDir, $isoPath, '/bootex') -WorkingDirectory (Split-Path -Parent $makeWinPeMedia)
+          Invoke-DeploymentToolsBatch -EnvironmentBatch $dandISetEnv -ToolBatch $makeWinPeMedia -ToolArguments @('/ISO', '/F', $workDir, $isoPath, '/bootex') -WorkingDirectory (Split-Path -Parent $makeWinPeMedia)
 
           New-Item -Path (Join-Path $env:GITHUB_WORKSPACE 'out') -ItemType Directory -Force | Out-Null
           Copy-Item -LiteralPath $isoPath -Destination (Join-Path $env:GITHUB_WORKSPACE 'out\sysdeploy-win10pe.iso') -Force
