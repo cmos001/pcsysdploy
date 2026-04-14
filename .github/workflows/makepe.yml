@@ -254,7 +254,7 @@ jobs:
             Remove-Item -LiteralPath $mountDir -Recurse -Force
           }
 
-          Invoke-External -FilePath 'cmd.exe' -ArgumentList @('/c', "`"`"$copype`"`" amd64 `"$workDir`"`"")
+          Invoke-External -FilePath $copype -ArgumentList @('amd64', $workDir)
 
           if (-not (Test-Path -LiteralPath $bootWim -PathType Leaf)) {
             throw "boot.wim was not created by copype: $bootWim"
@@ -341,7 +341,7 @@ jobs:
           }
 
           $isoPath = Join-Path $env:RUNNER_TEMP 'sysdeploy-win10pe.iso'
-          Invoke-External -FilePath 'cmd.exe' -ArgumentList @('/c', "`"`"$makeWinPeMedia`"`" /ISO /F `"$workDir`" `"$isoPath`" /bootex`"")
+          Invoke-External -FilePath $makeWinPeMedia -ArgumentList @('/ISO', '/F', $workDir, $isoPath, '/bootex')
 
           New-Item -Path (Join-Path $env:GITHUB_WORKSPACE 'out') -ItemType Directory -Force | Out-Null
           Copy-Item -LiteralPath $isoPath -Destination (Join-Path $env:GITHUB_WORKSPACE 'out\sysdeploy-win10pe.iso') -Force
