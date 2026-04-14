@@ -171,10 +171,11 @@ jobs:
 
             Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'autodeploy.ps1') -Destination (Join-Path $mountDir 'Windows\System32\autodeploy.ps1') -Force
 
-            @'
-            wpeinit
-            powershell.exe -ExecutionPolicy Bypass -File X:\Windows\System32\autodeploy.ps1
-            '@ | Set-Content -LiteralPath (Join-Path $mountDir 'Windows\System32\startnet.cmd') -Encoding ASCII
+            $startnetContent = @(
+              'wpeinit'
+              'powershell.exe -ExecutionPolicy Bypass -File X:\Windows\System32\autodeploy.ps1'
+            )
+            Set-Content -LiteralPath (Join-Path $mountDir 'Windows\System32\startnet.cmd') -Value $startnetContent -Encoding ASCII
 
             Invoke-External -FilePath 'dism.exe' -ArgumentList @(
               '/Unmount-Image'
