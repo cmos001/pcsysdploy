@@ -58,30 +58,71 @@ jobs:
             }
           }
 
-          $adkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit"
-          $copype = Get-ChildItem -LiteralPath $adkRoot -Filter 'copype.cmd' -Recurse | Select-Object -First 1 -ExpandProperty FullName
-          $makeWinPeMedia = Get-ChildItem -LiteralPath $adkRoot -Filter 'MakeWinPEMedia.cmd' -Recurse | Select-Object -First 1 -ExpandProperty FullName
-          $winpeOcRoot = Join-Path $adkRoot 'Windows Preinstallation Environment\amd64\WinPE_OCs'
+          $kitsRoots = @(
+            (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits'),
+            (Join-Path $env:ProgramFiles 'Windows Kits')
+          ) | Select-Object -Unique
+
+          $existingKitsRoots = @($kitsRoots | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
+          if ($existingKitsRoots.Count -eq 0) {
+            throw 'No Windows Kits root was found after ADK installation.'
+          }
+
+          $assessmentRoots = @(
+            foreach ($kitsRoot in $existingKitsRoots) {
+              Get-ChildItem -LiteralPath $kitsRoot -Directory -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -eq 'Assessment and Deployment Kit' } |
+                Select-Object -ExpandProperty FullName
+            }
+          ) | Select-Object -Unique
+
+          if ($assessmentRoots.Count -eq 0) {
+            throw 'Assessment and Deployment Kit directory was not found under any Windows Kits root.'
+          }
+
+          $copype = @(
+            foreach ($root in $assessmentRoots) {
+              Get-ChildItem -LiteralPath $root -Filter 'copype.cmd' -File -Recurse -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty FullName
+            }
+          ) | Select-Object -First 1
+
+          $makeWinPeMedia = @(
+            foreach ($root in $assessmentRoots) {
+              Get-ChildItem -LiteralPath $root -Filter 'MakeWinPEMedia.cmd' -File -Recurse -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty FullName
+            }
+          ) | Select-Object -First 1
+
+          $winpeOcRoot = @(
+            foreach ($root in $assessmentRoots) {
+              Get-ChildItem -LiteralPath $root -Directory -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -like '*\amd64\WinPE_OCs' } |
+                Select-Object -ExpandProperty FullName
+            }
+          ) | Select-Object -First 1
 
           Write-Host "ProgramFiles(x86): ${env:ProgramFiles(x86)}"
-          Write-Host "ADK root candidate: $adkRoot"
+          Write-Host "ProgramFiles: $env:ProgramFiles"
+          Write-Host "Windows Kits roots: $($existingKitsRoots -join '; ')"
+          Write-Host "ADK roots found: $($assessmentRoots -join '; ')"
           Write-Host "copype candidate: $copype"
           Write-Host "MakeWinPEMedia candidate: $makeWinPeMedia"
           Write-Host "WinPE optional components root: $winpeOcRoot"
 
-          if (Test-Path -LiteralPath "${env:ProgramFiles(x86)}\Windows Kits\10") {
-            Write-Host 'Windows Kits 10 tree snapshot:'
-            Get-ChildItem -LiteralPath "${env:ProgramFiles(x86)}\Windows Kits\10" -Force | Select-Object FullName
+          foreach ($kitsRoot in $existingKitsRoots) {
+            Write-Host "Windows Kits root snapshot: $kitsRoot"
+            Get-ChildItem -LiteralPath $kitsRoot -Force | Select-Object FullName
           }
 
-          if (Test-Path -LiteralPath $adkRoot) {
-            Write-Host 'ADK root snapshot:'
-            Get-ChildItem -LiteralPath $adkRoot -Force | Select-Object FullName
+          foreach ($assessmentRoot in $assessmentRoots) {
+            Write-Host "ADK root snapshot: $assessmentRoot"
+            Get-ChildItem -LiteralPath $assessmentRoot -Force | Select-Object FullName
           }
 
           if (-not $copype) { throw 'copype.cmd was not found after ADK installation.' }
           if (-not $makeWinPeMedia) { throw 'MakeWinPEMedia.cmd was not found after ADK installation.' }
-          if (-not (Test-Path -LiteralPath $winpeOcRoot)) { throw "WinPE optional components not found: $winpeOcRoot" }
+          if ([string]::IsNullOrWhiteSpace($winpeOcRoot) -or -not (Test-Path -LiteralPath $winpeOcRoot)) { throw "WinPE optional components not found: $winpeOcRoot" }
 
           $workDir = Join-Path $env:RUNNER_TEMP 'winpe_amd64'
           $mountDir = Join-Path $env:RUNNER_TEMP 'winpe_mount'
