@@ -65,8 +65,7 @@ jobs:
             '/quiet',
             '/norestart',
             '/ceip', 'off',
-            '/installpath', $env:ADK_INSTALL_ROOT,
-            '/features', 'OptionId.DeploymentTools'
+            '/installpath', $env:ADK_INSTALL_ROOT
           )
 
           Write-Host "ADK layout snapshot: $env:ADK_LAYOUT_ROOT"
@@ -122,8 +121,7 @@ jobs:
             '/quiet',
             '/norestart',
             '/ceip', 'off',
-            '/installpath', $env:ADK_INSTALL_ROOT,
-            '/features', 'OptionId.WindowsPreinstallationEnvironment'
+            '/installpath', $env:ADK_INSTALL_ROOT
           )
 
           Write-Host "WinPE layout snapshot: $winPeLayout"
