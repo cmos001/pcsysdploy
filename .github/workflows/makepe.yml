@@ -64,8 +64,7 @@ jobs:
           Invoke-Installer -FilePath $offlineAdkSetup -ArgumentList @(
             '/quiet',
             '/norestart',
-            '/ceip', 'off',
-            '/installpath', $env:ADK_INSTALL_ROOT
+            '/ceip', 'off'
           )
 
           Write-Host "ADK layout snapshot: $env:ADK_LAYOUT_ROOT"
@@ -120,8 +119,7 @@ jobs:
           Invoke-Installer -FilePath $offlineWinPeSetup -ArgumentList @(
             '/quiet',
             '/norestart',
-            '/ceip', 'off',
-            '/installpath', $env:ADK_INSTALL_ROOT
+            '/ceip', 'off'
           )
 
           Write-Host "WinPE layout snapshot: $winPeLayout"
