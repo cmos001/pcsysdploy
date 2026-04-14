@@ -136,11 +136,25 @@ jobs:
               [string]$FilePath,
 
               [Parameter(Mandatory = $true)]
-              [string[]]$ArgumentList
+              [string[]]$ArgumentList,
+
+              [string]$WorkingDirectory
             )
 
             Write-Host ("Running: {0} {1}" -f $FilePath, ($ArgumentList -join ' '))
-            $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru -NoNewWindow
+            $startProcessSplat = @{
+              FilePath = $FilePath
+              ArgumentList = $ArgumentList
+              Wait = $true
+              PassThru = $true
+              NoNewWindow = $true
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+              $startProcessSplat['WorkingDirectory'] = $WorkingDirectory
+            }
+
+            $process = Start-Process @startProcessSplat
             if ($process.ExitCode -ne 0) {
               throw ("Command failed with exit code {0}: {1}" -f $process.ExitCode, $FilePath)
             }
@@ -254,7 +268,7 @@ jobs:
             Remove-Item -LiteralPath $mountDir -Recurse -Force
           }
 
-          Invoke-External -FilePath $copype -ArgumentList @('amd64', $workDir)
+          Invoke-External -FilePath $copype -ArgumentList @('amd64', $workDir) -WorkingDirectory (Split-Path -Parent $copype)
 
           if (-not (Test-Path -LiteralPath $bootWim -PathType Leaf)) {
             throw "boot.wim was not created by copype: $bootWim"
@@ -341,7 +355,7 @@ jobs:
           }
 
           $isoPath = Join-Path $env:RUNNER_TEMP 'sysdeploy-win10pe.iso'
-          Invoke-External -FilePath $makeWinPeMedia -ArgumentList @('/ISO', '/F', $workDir, $isoPath, '/bootex')
+          Invoke-External -FilePath $makeWinPeMedia -ArgumentList @('/ISO', '/F', $workDir, $isoPath, '/bootex') -WorkingDirectory (Split-Path -Parent $makeWinPeMedia)
 
           New-Item -Path (Join-Path $env:GITHUB_WORKSPACE 'out') -ItemType Directory -Force | Out-Null
           Copy-Item -LiteralPath $isoPath -Destination (Join-Path $env:GITHUB_WORKSPACE 'out\sysdeploy-win10pe.iso') -Force
