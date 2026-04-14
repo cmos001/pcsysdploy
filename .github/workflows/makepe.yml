@@ -1,0 +1,101 @@
+name: makepe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download official ADK installers
+        shell: powershell
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?linkid=2289980' -OutFile "$env:RUNNER_TEMP\adksetup.exe"
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?linkid=2289981' -OutFile "$env:RUNNER_TEMP\adkwinpesetup.exe"
+
+      - name: Install ADK Deployment Tools
+        shell: powershell
+        run: |
+          Start-Process -FilePath "$env:RUNNER_TEMP\adksetup.exe" -ArgumentList @(
+            '/quiet',
+            '/norestart',
+            '/ceip', 'off',
+            '/features', 'OptionId.DeploymentTools'
+          ) -Wait -NoNewWindow
+
+      - name: Install WinPE add-on
+        shell: powershell
+        run: |
+          Start-Process -FilePath "$env:RUNNER_TEMP\adkwinpesetup.exe" -ArgumentList @(
+            '/quiet',
+            '/norestart',
+            '/ceip', 'off',
+            '/features', 'OptionId.WindowsPreinstallationEnvironment'
+          ) -Wait -NoNewWindow
+
+      - name: Build PE and inject autodeploy only
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $adkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit"
+          $copype = Get-ChildItem -LiteralPath $adkRoot -Filter 'copype.cmd' -Recurse | Select-Object -First 1 -ExpandProperty FullName
+          $makeWinPeMedia = Get-ChildItem -LiteralPath $adkRoot -Filter 'MakeWinPEMedia.cmd' -Recurse | Select-Object -First 1 -ExpandProperty FullName
+          $winpeOcRoot = Join-Path $adkRoot 'Windows Preinstallation Environment\amd64\WinPE_OCs'
+
+          if (-not $copype) { throw 'copype.cmd was not found after ADK installation.' }
+          if (-not $makeWinPeMedia) { throw 'MakeWinPEMedia.cmd was not found after ADK installation.' }
+          if (-not (Test-Path -LiteralPath $winpeOcRoot)) { throw "WinPE optional components not found: $winpeOcRoot" }
+
+          $workDir = Join-Path $env:RUNNER_TEMP 'winpe_amd64'
+          $mountDir = Join-Path $env:RUNNER_TEMP 'winpe_mount'
+          $mediaDir = Join-Path $workDir 'media'
+          $bootWim = Join-Path $mediaDir 'sources\boot.wim'
+
+          cmd /c "`"$copype`" amd64 `"$workDir`""
+          New-Item -Path $mountDir -ItemType Directory -Force | Out-Null
+
+          dism /Mount-Image /ImageFile:$bootWim /Index:1 /MountDir:$mountDir
+
+          $packages = @(
+            'WinPE-WMI',
+            'WinPE-NetFX',
+            'WinPE-Scripting',
+            'WinPE-PowerShell',
+            'WinPE-StorageWMI',
+            'WinPE-DismCmdlets'
+          )
+
+          foreach ($package in $packages) {
+            $neutralCab = Join-Path $winpeOcRoot ($package + '.cab')
+            $langCab = Join-Path $winpeOcRoot ('en-us\' + $package + '_en-us.cab')
+
+            dism /Image:$mountDir /Add-Package /PackagePath:$neutralCab
+            if (Test-Path -LiteralPath $langCab) {
+              dism /Image:$mountDir /Add-Package /PackagePath:$langCab
+            }
+          }
+
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'autodeploy.ps1') -Destination (Join-Path $mountDir 'Windows\System32\autodeploy.ps1') -Force
+
+          @'
+          wpeinit
+          powershell.exe -ExecutionPolicy Bypass -File X:\Windows\System32\autodeploy.ps1
+          '@ | Set-Content -LiteralPath (Join-Path $mountDir 'Windows\System32\startnet.cmd') -Encoding ASCII
+
+          dism /Unmount-Image /MountDir:$mountDir /Commit
+
+          $isoPath = Join-Path $env:RUNNER_TEMP 'sysdeploy-win10pe.iso'
+          cmd /c "`"$makeWinPeMedia`" /ISO /F `"$workDir`" `"$isoPath`" /bootex"
+
+          New-Item -Path (Join-Path $env:GITHUB_WORKSPACE 'out') -ItemType Directory -Force | Out-Null
+          Copy-Item -LiteralPath $isoPath -Destination (Join-Path $env:GITHUB_WORKSPACE 'out\sysdeploy-win10pe.iso') -Force
+
+      - name: Upload PE ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: sysdeploy-win10pe
+          path: out/sysdeploy-win10pe.iso

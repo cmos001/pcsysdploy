@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "profile_id": "default",
+  "collected_utc": null,
+  "host": {
+    "computer_name": null,
+    "os_caption": null,
+    "os_version": null,
+    "os_build": null,
+    "architecture": null,
+    "firmware": null,
+    "system_drive": null,
+    "windows_directory": null
+  },
+  "inventory": {
+    "disks": [],
+    "volumes": []
+  },
+  "deploy": {
+    "install_mode": "clean",
+    "package": {
+      "path": ".\\windows.wim",
+      "image_index": 1,
+      "official_iso_url": "https://www.microsoft.com/software-download/windows11",
+      "official_esd_url": "https://www.microsoft.com/software-download/windows10iso",
+      "official_wim_note": "Place your actual install.wim under sysdeploy\\windows.wim."
+    },
+    "target": {
+      "existing_windows_path": "W:\\",
+      "existing_system_path": "S:\\"
+    },
+    "driver_injection": {
+      "enabled": false,
+      "path": ".\\drivers"
+    },
+    "boot_files": {
+      "preserve_boot_menu_order": true,
+      "preserve_firmware_order": true,
+      "add_firmware_entry_last": false,
+      "use_bootex": false
+    },
+    "restart_after_deploy": true
+  }
+}

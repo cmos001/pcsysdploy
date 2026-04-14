@@ -1,0 +1,1 @@
+Place your extracted or captured install.wim here as sysdeploy\windows.wim.
