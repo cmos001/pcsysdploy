@@ -8,6 +8,7 @@ jobs:
     runs-on: windows-2022
     env:
       ADK_INSTALL_ROOT: C:\ADK
+      ADK_LAYOUT_ROOT: C:\ADKLayout
 
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +27,16 @@ jobs:
             New-Item -Path $env:ADK_INSTALL_ROOT -ItemType Directory -Force | Out-Null
           }
 
+          if (Test-Path -LiteralPath $env:ADK_LAYOUT_ROOT) {
+            Remove-Item -LiteralPath $env:ADK_LAYOUT_ROOT -Recurse -Force
+          }
+          New-Item -Path $env:ADK_LAYOUT_ROOT -ItemType Directory -Force | Out-Null
+
+          Start-Process -FilePath "$env:RUNNER_TEMP\adksetup.exe" -ArgumentList @(
+            '/quiet',
+            '/layout', $env:ADK_LAYOUT_ROOT
+          ) -Wait -NoNewWindow
+
           Start-Process -FilePath "$env:RUNNER_TEMP\adksetup.exe" -ArgumentList @(
             '/quiet',
             '/norestart',
@@ -37,6 +48,17 @@ jobs:
       - name: Install WinPE add-on
         shell: powershell
         run: |
+          $winPeLayout = Join-Path $env:ADK_LAYOUT_ROOT 'WinPE'
+          if (Test-Path -LiteralPath $winPeLayout) {
+            Remove-Item -LiteralPath $winPeLayout -Recurse -Force
+          }
+          New-Item -Path $winPeLayout -ItemType Directory -Force | Out-Null
+
+          Start-Process -FilePath "$env:RUNNER_TEMP\adkwinpesetup.exe" -ArgumentList @(
+            '/quiet',
+            '/layout', $winPeLayout
+          ) -Wait -NoNewWindow
+
           Start-Process -FilePath "$env:RUNNER_TEMP\adkwinpesetup.exe" -ArgumentList @(
             '/quiet',
             '/norestart',
@@ -66,31 +88,96 @@ jobs:
             }
           }
 
-          $adkRoot = $env:ADK_INSTALL_ROOT
-          $copype = @(
-            Get-ChildItem -LiteralPath $adkRoot -Filter 'copype.cmd' -File -Recurse -ErrorAction SilentlyContinue |
-              Select-Object -ExpandProperty FullName
-          ) | Select-Object -First 1
+          function Get-AdkCandidateRoots {
+            $roots = New-Object System.Collections.Generic.List[string]
 
-          $makeWinPeMedia = @(
-            Get-ChildItem -LiteralPath $adkRoot -Filter 'MakeWinPEMedia.cmd' -File -Recurse -ErrorAction SilentlyContinue |
-              Select-Object -ExpandProperty FullName
-          ) | Select-Object -First 1
+            foreach ($path in @(
+              $env:ADK_INSTALL_ROOT,
+              'C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit',
+              'C:\Program Files\Windows Kits\10\Assessment and Deployment Kit'
+            )) {
+              if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -LiteralPath $path)) {
+                [void]$roots.Add($path)
+              }
+            }
 
-          $winpeOcRoot = @(
-            Get-ChildItem -LiteralPath $adkRoot -Directory -Recurse -ErrorAction SilentlyContinue |
-              Where-Object { $_.FullName -like '*\amd64\WinPE_OCs' } |
-              Select-Object -ExpandProperty FullName
-          ) | Select-Object -First 1
+            foreach ($regPath in @(
+              'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows Kits\Installed Roots',
+              'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots'
+            )) {
+              try {
+                $item = Get-ItemProperty -Path $regPath -ErrorAction Stop
+                foreach ($property in @('KitsRoot10', 'KitsRoot81')) {
+                  $kitsRoot = [string]$item.$property
+                  if (-not [string]::IsNullOrWhiteSpace($kitsRoot) -and (Test-Path -LiteralPath $kitsRoot)) {
+                    $candidate = Join-Path $kitsRoot 'Assessment and Deployment Kit'
+                    if (Test-Path -LiteralPath $candidate) {
+                      [void]$roots.Add($candidate)
+                    }
+                  }
+                }
+              }
+              catch {
+              }
+            }
 
-          Write-Host "ADK install root: $adkRoot"
+            return @($roots | Select-Object -Unique)
+          }
+
+          function Find-FirstPath {
+            param(
+              [string[]]$Roots,
+              [string]$Filter
+            )
+
+            foreach ($root in $Roots) {
+              $match = @(
+                Get-ChildItem -LiteralPath $root -Filter $Filter -File -Recurse -ErrorAction SilentlyContinue |
+                  Select-Object -ExpandProperty FullName
+              ) | Select-Object -First 1
+
+              if ($match) {
+                return $match
+              }
+            }
+
+            return $null
+          }
+
+          function Find-WinPeOcRoot {
+            param([string[]]$Roots)
+
+            foreach ($root in $Roots) {
+              $match = @(
+                Get-ChildItem -LiteralPath $root -Directory -Recurse -ErrorAction SilentlyContinue |
+                  Where-Object { $_.FullName -like '*\amd64\WinPE_OCs' } |
+                  Select-Object -ExpandProperty FullName
+              ) | Select-Object -First 1
+
+              if ($match) {
+                return $match
+              }
+            }
+
+            return $null
+          }
+
+          $adkRoots = Get-AdkCandidateRoots
+          $copype = Find-FirstPath -Roots $adkRoots -Filter 'copype.cmd'
+          $makeWinPeMedia = Find-FirstPath -Roots $adkRoots -Filter 'MakeWinPEMedia.cmd'
+          $winpeOcRoot = Find-WinPeOcRoot -Roots $adkRoots
+
+          Write-Host "Configured ADK install root: $env:ADK_INSTALL_ROOT"
+          Write-Host "Configured ADK layout root: $env:ADK_LAYOUT_ROOT"
+          Write-Host 'Candidate ADK roots:'
+          $adkRoots | ForEach-Object { Write-Host " - $_" }
           Write-Host "copype candidate: $copype"
           Write-Host "MakeWinPEMedia candidate: $makeWinPeMedia"
           Write-Host "WinPE optional components root: $winpeOcRoot"
 
-          if (Test-Path -LiteralPath $adkRoot) {
-            Write-Host "ADK install root snapshot: $adkRoot"
-            Get-ChildItem -LiteralPath $adkRoot -Force | Select-Object FullName
+          foreach ($root in $adkRoots) {
+            Write-Host "ADK root snapshot: $root"
+            Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue | Select-Object FullName
           }
 
           if (-not $copype) { throw 'copype.cmd was not found after ADK installation.' }
