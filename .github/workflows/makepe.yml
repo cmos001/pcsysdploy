@@ -370,7 +370,7 @@ jobs:
           @(
             '@echo off'
             'call "%DANDISETENV%"'
-            'MakeWinPEMedia /ISO /F "%WORK_DIR%" "%ISO_PATH%" /bootex'
+            'MakeWinPEMedia /ISO /F "%WORK_DIR%" "%ISO_PATH%"'
           ) | Set-Content -LiteralPath $driver -Encoding ASCII
 
           & cmd.exe /d /s /c "`"$driver`""
