@@ -125,45 +125,11 @@ jobs:
           Write-Host "WinPE layout snapshot: $winPeLayout"
           Get-ChildItem -LiteralPath $winPeLayout -Force -ErrorAction SilentlyContinue | Select-Object FullName
 
-      - name: Build PE and inject autodeploy only
+      - name: Prepare WinPE tool paths
         shell: powershell
-        timeout-minutes: 60
+        timeout-minutes: 15
         run: |
           $ErrorActionPreference = 'Stop'
-
-          function Invoke-External {
-            param(
-              [Parameter(Mandatory = $true)]
-              [string]$FilePath,
-
-              [Parameter(Mandatory = $true)]
-              [string[]]$ArgumentList,
-
-              [string]$WorkingDirectory
-            )
-
-            Write-Host ("Running: {0} {1}" -f $FilePath, ($ArgumentList -join ' '))
-            $previousLocation = $null
-            try {
-              if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
-                $previousLocation = Get-Location
-                Set-Location -LiteralPath $WorkingDirectory
-              }
-
-              & $FilePath @ArgumentList
-              $exitCode = $LASTEXITCODE
-              if ($exitCode -ne 0) {
-                throw ("Command failed with exit code {0}: {1}" -f $exitCode, $FilePath)
-              }
-
-              Write-Host ("Completed: {0}" -f $FilePath)
-            }
-            finally {
-              if ($null -ne $previousLocation) {
-                Set-Location -LiteralPath $previousLocation.Path
-              }
-            }
-          }
 
           function Get-AdkCandidateRoots {
             $roots = New-Object System.Collections.Generic.List[string]
@@ -239,40 +205,16 @@ jobs:
             return $null
           }
 
-          function Invoke-DeploymentToolsBatch {
-            param(
-              [Parameter(Mandatory = $true)]
-              [string]$EnvironmentBatch,
-
-              [Parameter(Mandatory = $true)]
-              [string]$ToolCommand,
-
-              [Parameter(Mandatory = $true)]
-              [string[]]$ToolArguments,
-
-              [Parameter(Mandatory = $true)]
-              [string]$WorkingDirectory
-            )
-
-            $quotedArgs = @()
-            foreach ($argument in $ToolArguments) {
-              if ($argument -match '\s') {
-                $quotedArgs += ('"{0}"' -f $argument)
-              }
-              else {
-                $quotedArgs += $argument
-              }
-            }
-
-            $commandLine = 'call "{0}" && {1} {2}' -f $EnvironmentBatch, $ToolCommand, ($quotedArgs -join ' ')
-            Invoke-External -FilePath 'cmd.exe' -ArgumentList @('/c', $commandLine) -WorkingDirectory $WorkingDirectory
-          }
-
           $adkRoots = Get-AdkCandidateRoots
           $dandISetEnv = Find-FirstPath -Roots $adkRoots -Filter 'DandISetEnv.bat'
           $copype = Find-FirstPath -Roots $adkRoots -Filter 'copype.cmd'
           $makeWinPeMedia = Find-FirstPath -Roots $adkRoots -Filter 'MakeWinPEMedia.cmd'
           $winpeOcRoot = Find-WinPeOcRoot -Roots $adkRoots
+          $workDir = Join-Path $env:RUNNER_TEMP 'winpe_amd64'
+          $mountDir = Join-Path $env:RUNNER_TEMP 'winpe_mount'
+          $mediaDir = Join-Path $workDir 'media'
+          $bootWim = Join-Path $mediaDir 'sources\boot.wim'
+          $isoPath = Join-Path $env:RUNNER_TEMP 'sysdeploy-win10pe.iso'
 
           Write-Host "Configured ADK install root: $env:ADK_INSTALL_ROOT"
           Write-Host "Configured ADK layout root: $env:ADK_LAYOUT_ROOT"
@@ -283,20 +225,10 @@ jobs:
           Write-Host "MakeWinPEMedia candidate: $makeWinPeMedia"
           Write-Host "WinPE optional components root: $winpeOcRoot"
 
-          foreach ($root in $adkRoots) {
-            Write-Host "ADK root snapshot: $root"
-            Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue | Select-Object FullName
-          }
-
           if (-not $dandISetEnv) { throw 'DandISetEnv.bat was not found after ADK installation.' }
           if (-not $copype) { throw 'copype.cmd was not found after ADK installation.' }
           if (-not $makeWinPeMedia) { throw 'MakeWinPEMedia.cmd was not found after ADK installation.' }
           if ([string]::IsNullOrWhiteSpace($winpeOcRoot) -or -not (Test-Path -LiteralPath $winpeOcRoot)) { throw "WinPE optional components not found: $winpeOcRoot" }
-
-          $workDir = Join-Path $env:RUNNER_TEMP 'winpe_amd64'
-          $mountDir = Join-Path $env:RUNNER_TEMP 'winpe_mount'
-          $mediaDir = Join-Path $workDir 'media'
-          $bootWim = Join-Path $mediaDir 'sources\boot.wim'
 
           if (Test-Path -LiteralPath $workDir) {
             Remove-Item -LiteralPath $workDir -Recurse -Force
@@ -305,103 +237,149 @@ jobs:
             Remove-Item -LiteralPath $mountDir -Recurse -Force
           }
 
-          Invoke-DeploymentToolsBatch -EnvironmentBatch $dandISetEnv -ToolCommand 'copype' -ToolArguments @('amd64', $workDir) -WorkingDirectory (Split-Path -Parent $copype)
-          Write-Host 'copype finished.'
+          @(
+            "DANDISETENV=$dandISetEnv"
+            "COPYPE=$copype"
+            "MAKEWINPEMEDIA=$makeWinPeMedia"
+            "WINPE_OC_ROOT=$winpeOcRoot"
+            "WORK_DIR=$workDir"
+            "MOUNT_DIR=$mountDir"
+            "MEDIA_DIR=$mediaDir"
+            "BOOT_WIM=$bootWim"
+            "ISO_PATH=$isoPath"
+          ) | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding UTF8
 
-          if (-not (Test-Path -LiteralPath $bootWim -PathType Leaf)) {
-            throw "boot.wim was not created by copype: $bootWim"
+      - name: Create base WinPE workspace
+        shell: powershell
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $driver = Join-Path $env:RUNNER_TEMP 'run-copype.cmd'
+          @(
+            '@echo off'
+            'call "%DANDISETENV%"'
+            'copype amd64 "%WORK_DIR%"'
+          ) | Set-Content -LiteralPath $driver -Encoding ASCII
+
+          & cmd.exe /d /s /c "`"$driver`""
+          if ($LASTEXITCODE -ne 0) {
+            throw "copype failed with exit code $LASTEXITCODE"
           }
 
-          Write-Host "boot.wim created at: $bootWim"
+          if (-not (Test-Path -LiteralPath $env:BOOT_WIM -PathType Leaf)) {
+            throw "boot.wim was not created by copype: $env:BOOT_WIM"
+          }
 
-          New-Item -Path $mountDir -ItemType Directory -Force | Out-Null
+          Write-Host "boot.wim created at: $env:BOOT_WIM"
 
+      - name: Mount boot.wim
+        shell: powershell
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -Path $env:MOUNT_DIR -ItemType Directory -Force | Out-Null
+
+          & dism.exe /Mount-Image "/ImageFile:$env:BOOT_WIM" /Index:1 "/MountDir:$env:MOUNT_DIR"
+          if ($LASTEXITCODE -ne 0) {
+            throw "DISM mount failed with exit code $LASTEXITCODE"
+          }
+
+          $mountedSystem32 = Join-Path $env:MOUNT_DIR 'Windows\System32'
+          if (-not (Test-Path -LiteralPath $mountedSystem32 -PathType Container)) {
+            throw "Mounted WinPE image does not expose Windows\System32: $mountedSystem32"
+          }
+
+          Write-Host "Mounted image system32 path: $mountedSystem32"
+
+      - name: Add WinPE optional components
+        shell: powershell
+        timeout-minutes: 30
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packages = @(
+            'WinPE-WMI',
+            'WinPE-NetFX',
+            'WinPE-Scripting',
+            'WinPE-PowerShell',
+            'WinPE-StorageWMI',
+            'WinPE-DismCmdlets'
+          )
+
+          foreach ($package in $packages) {
+            $neutralCab = Join-Path $env:WINPE_OC_ROOT ($package + '.cab')
+            $langCab = Join-Path $env:WINPE_OC_ROOT ('en-us\' + $package + '_en-us.cab')
+
+            if (-not (Test-Path -LiteralPath $neutralCab -PathType Leaf)) {
+              throw "Missing WinPE package: $neutralCab"
+            }
+
+            Write-Host "Adding WinPE package: $neutralCab"
+            & dism.exe "/Image:$env:MOUNT_DIR" /Add-Package "/PackagePath:$neutralCab"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed adding WinPE package $package with exit code $LASTEXITCODE"
+            }
+
+            if (Test-Path -LiteralPath $langCab -PathType Leaf) {
+              Write-Host "Adding WinPE language package: $langCab"
+              & dism.exe "/Image:$env:MOUNT_DIR" /Add-Package "/PackagePath:$langCab"
+              if ($LASTEXITCODE -ne 0) {
+                throw "Failed adding WinPE language package $package with exit code $LASTEXITCODE"
+              }
+            }
+          }
+
+      - name: Inject autodeploy into boot.wim
+        shell: powershell
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'autodeploy.ps1') -Destination (Join-Path $env:MOUNT_DIR 'Windows\System32\autodeploy.ps1') -Force
+
+          $startnetContent = @(
+            'wpeinit'
+            'powershell.exe -ExecutionPolicy Bypass -File X:\Windows\System32\autodeploy.ps1'
+          )
+          Set-Content -LiteralPath (Join-Path $env:MOUNT_DIR 'Windows\System32\startnet.cmd') -Value $startnetContent -Encoding ASCII
+
+      - name: Commit boot.wim changes
+        shell: powershell
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = 'Stop'
           try {
-            Invoke-External -FilePath 'dism.exe' -ArgumentList @(
-              '/Mount-Image'
-              "/ImageFile:$bootWim"
-              '/Index:1'
-              "/MountDir:$mountDir"
-            )
-            Write-Host 'boot.wim mount finished.'
-
-            $mountedSystem32 = Join-Path $mountDir 'Windows\System32'
-            if (-not (Test-Path -LiteralPath $mountedSystem32 -PathType Container)) {
-              throw "Mounted WinPE image does not expose Windows\\System32: $mountedSystem32"
+            & dism.exe /Unmount-Image "/MountDir:$env:MOUNT_DIR" /Commit
+            if ($LASTEXITCODE -ne 0) {
+              throw "DISM unmount commit failed with exit code $LASTEXITCODE"
             }
-
-            Write-Host "Mounted image system32 path: $mountedSystem32"
-
-            $packages = @(
-              'WinPE-WMI',
-              'WinPE-NetFX',
-              'WinPE-Scripting',
-              'WinPE-PowerShell',
-              'WinPE-StorageWMI',
-              'WinPE-DismCmdlets'
-            )
-
-            foreach ($package in $packages) {
-              $neutralCab = Join-Path $winpeOcRoot ($package + '.cab')
-              $langCab = Join-Path $winpeOcRoot ('en-us\' + $package + '_en-us.cab')
-
-              if (-not (Test-Path -LiteralPath $neutralCab -PathType Leaf)) {
-                throw "Missing WinPE package: $neutralCab"
-              }
-
-              Write-Host "Adding WinPE package: $neutralCab"
-
-              Invoke-External -FilePath 'dism.exe' -ArgumentList @(
-                "/Image:$mountDir"
-                '/Add-Package'
-                "/PackagePath:$neutralCab"
-              )
-              Write-Host ("Neutral package added: {0}" -f $package)
-
-              if (Test-Path -LiteralPath $langCab -PathType Leaf) {
-                Write-Host "Adding WinPE language package: $langCab"
-                Invoke-External -FilePath 'dism.exe' -ArgumentList @(
-                  "/Image:$mountDir"
-                  '/Add-Package'
-                  "/PackagePath:$langCab"
-                )
-                Write-Host ("Language package added: {0}" -f $package)
-              }
-            }
-
-            Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'autodeploy.ps1') -Destination (Join-Path $mountDir 'Windows\System32\autodeploy.ps1') -Force
-
-            $startnetContent = @(
-              'wpeinit'
-              'powershell.exe -ExecutionPolicy Bypass -File X:\Windows\System32\autodeploy.ps1'
-            )
-            Set-Content -LiteralPath (Join-Path $mountDir 'Windows\System32\startnet.cmd') -Value $startnetContent -Encoding ASCII
-
-            Invoke-External -FilePath 'dism.exe' -ArgumentList @(
-              '/Unmount-Image'
-              "/MountDir:$mountDir"
-              '/Commit'
-            )
-            Write-Host 'boot.wim unmount commit finished.'
           }
           catch {
-            if (Test-Path -LiteralPath $mountDir) {
-              try {
-                Start-Process -FilePath 'dism.exe' -ArgumentList @('/Unmount-Image', "/MountDir:$mountDir", '/Discard') -Wait -NoNewWindow | Out-Null
-              }
-              catch {
-              }
+            if (Test-Path -LiteralPath $env:MOUNT_DIR) {
+              & dism.exe /Unmount-Image "/MountDir:$env:MOUNT_DIR" /Discard | Out-Null
             }
-
             throw
           }
 
-          $isoPath = Join-Path $env:RUNNER_TEMP 'sysdeploy-win10pe.iso'
-          Invoke-DeploymentToolsBatch -EnvironmentBatch $dandISetEnv -ToolCommand 'MakeWinPEMedia' -ToolArguments @('/ISO', '/F', $workDir, $isoPath, '/bootex') -WorkingDirectory (Split-Path -Parent $makeWinPeMedia)
-          Write-Host 'MakeWinPEMedia finished.'
+          Write-Host 'boot.wim unmount commit finished.'
+
+      - name: Create WinPE ISO
+        shell: powershell
+        timeout-minutes: 25
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $driver = Join-Path $env:RUNNER_TEMP 'run-makewinpemedia.cmd'
+          @(
+            '@echo off'
+            'call "%DANDISETENV%"'
+            'MakeWinPEMedia /ISO /F "%WORK_DIR%" "%ISO_PATH%" /bootex'
+          ) | Set-Content -LiteralPath $driver -Encoding ASCII
+
+          & cmd.exe /d /s /c "`"$driver`""
+          if ($LASTEXITCODE -ne 0) {
+            throw "MakeWinPEMedia failed with exit code $LASTEXITCODE"
+          }
 
           New-Item -Path (Join-Path $env:GITHUB_WORKSPACE 'out') -ItemType Directory -Force | Out-Null
-          Copy-Item -LiteralPath $isoPath -Destination (Join-Path $env:GITHUB_WORKSPACE 'out\sysdeploy-win10pe.iso') -Force
+          Copy-Item -LiteralPath $env:ISO_PATH -Destination (Join-Path $env:GITHUB_WORKSPACE 'out\sysdeploy-win10pe.iso') -Force
           Write-Host 'ISO copied to workspace output.'
 
       - name: Upload PE ISO
